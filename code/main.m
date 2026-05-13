@@ -14,12 +14,19 @@ clc, clearvars, close all, format compact
 % 6. Jeżeli działa -> pochwal się że sam to napisałeś
 %    Jeżeli nie działa -> to chat to tak napisał
 
+% Dodać korekcję dystorsji (dane są w pliku kalibracji kamery)
+% Dodać obsługę błędów (np. brak danych)
+% Dodać porównywanie z rzeczywistymi wartościami
+% Naniesć współrzędne na film z lotu drona (opcjonalnie, jak będzie czas i
+% chęci..., czyli tej funkcji najpewnej nie będzie...)
+
+% Dla dwóch dronów albo osobny program, albo zmodyfikować ten - dopytać
+
+
+
 % Pobieranie parametrów kamery
 camera_calibration = readtable("cameras_calibration.csv", "Delimiter", ";");
 num_of_cameras = length(camera_calibration.cam_name);
-
-% Wyświelt dla sprawdzenia
-% disp(camera_calibration);
 
 % Ogniskowa
 f = camera_calibration.focal_length(1);
@@ -52,3 +59,71 @@ for i = 1:num_of_cameras
     % Macierz projekcji
     P{i} = K * [R t];    
 end
+
+
+% Układ kolumn w pliku .csv
+% 1 - nr klatki obrazu
+% 2 - środek obiektu na osi x
+% 3 - środek obiektu na osi y
+% 4 - szerokość ramki
+% 5 - wysokość ramki
+% 6 - współrzędna x prawego górnego rogu
+% 7 - współrzędna y prawego górnego rogu
+% 8 - pewność należności obiektu do przypisanej mu klasy (confidence)
+
+% Ścieżki do plików
+file_paths = {
+    "dl_data/55260362.csv", ...
+    "dl_data/60881257.csv", ...
+    "dl_data/61016180.csv", ...
+    "dl_data/61920488.csv"
+};
+
+% Dane z YOLOv5 dla każdej z kamer
+drone_data = cell(4, 1);
+for i = 1:num_of_cameras
+    drone_data{i} = readmatrix(file_paths{i});
+end
+
+% Współrzędne x, y drona na obrazie
+drone_coords = cell(4, 1);
+for i = 1:num_of_cameras
+    drone_coords{i} = drone_data{i}(:, [2,3]);
+end
+
+% Wyznaczanie współrzędnych x,y,z
+frames = length(drone_data{1}(:, 1));
+trajectory_3d = NaN(frames, 3);
+
+for i = 1:frames
+    
+    L = zeros(num_of_cameras*2, 3);
+    B = zeros(num_of_cameras*2, 1);
+
+    for cam = 1:num_of_cameras
+
+       point = drone_coords{cam}(i, :);
+
+       % Pomiń w przypadku braku detekcji
+       if any(isnan(point))
+           continue
+       end
+
+       x = point(1);
+       y = point(2);
+       Pcam = P{cam};
+
+       % Rekonstrukcja koordynatów 3D
+       L(cam, :) = [Pcam(1,1) - x*Pcam(3,1), Pcam(1,2) - x*Pcam(3,2), Pcam(1,3) - x*Pcam(3,3)];
+       B(cam) = x*Pcam(3,4) - Pcam(1,4);
+       L(cam + 1, :) = [Pcam(2,1) - y*Pcam(3,1), Pcam(2,2) - y*Pcam(3,2), Pcam(2,3) - y*Pcam(3,3)];
+       B(cam + 1) = y*Pcam(3,4) - Pcam(2,4);
+    end
+
+    % Obliczanie współrzędnych 3D
+    xyz = pinv(L) * B;
+    trajectory_3d(i, :) = xyz';
+end
+
+% Wyświetlanie trajektori lotu drona
+plot3(trajectory_3d(:, 1), trajectory_3d(:, 2), trajectory_3d(:, 3));
